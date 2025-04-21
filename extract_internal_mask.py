@@ -1,70 +1,184 @@
 import cv2
 import numpy as np
 import os
-from scipy.spatial import ConvexHull
+import math
 
-# === Paths ===
-base_path = "C:\\Users\\wasim\\Projects\\extract_mask"
-input_folder = os.path.join(base_path, "EBM6_heatmaps")
-output_folder = os.path.join(base_path, "EBM6_internal")
-os.makedirs(output_folder, exist_ok=True)
+# === Configuration ===
+input_folder = "EBM6_heatmaps"
+output_base_folder = os.path.join(input_folder, "heatmap_colors_output")
+highlighted_output_folder = os.path.join(output_base_folder, "highlighted_defects")
+os.makedirs(highlighted_output_folder, exist_ok=True)
 
-# === Process each .png heatmap ===
-for image_name in os.listdir(input_folder):
-    if not image_name.lower().endswith(".png"):
+# === Static dark red range ===
+color_ranges = {
+    "dark_red": [([0, 200, 100], [10, 255, 180]), ([160, 200, 100], [180, 255, 180])]
+}
+
+# === Morphology kernel ===
+kernel = np.ones((5, 5), np.uint8)
+
+# === Helper: Check if circle is inside another ===
+def is_inside(c1, c2):
+    cx1, cy1 = c1["center"]
+    cx2, cy2 = c2["center"]
+    dist = math.sqrt((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2)
+    return dist + c1["radius"] <= c2["radius"]
+
+# === HSV presets ===
+red_presets = [
+    [([0, 180, 180], [10, 255, 255]), ([160, 180, 180], [180, 255, 255])],
+    [([0, 150, 150], [10, 255, 255]), ([160, 150, 150], [180, 255, 255])],
+    [([0, 130, 100], [10, 255, 255]), ([160, 130, 100], [180, 255, 255])]
+]
+
+orange_presets = [
+    [([10, 100, 100], [25, 255, 255])],
+    [([8, 80, 80], [24, 255, 255])],
+    [([10, 70, 70], [26, 255, 255])]
+]
+
+yellow_range = [([26, 100, 100], [35, 255, 255])]
+blue_range = [([100, 80, 80], [130, 255, 255])]
+
+# === Process images ===
+for filename in os.listdir(input_folder):
+    if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
         continue
 
-    input_path = os.path.join(input_folder, image_name)
-    output_path = os.path.join(output_folder, image_name.replace("_heatmap", "_internal"))
+    filepath = os.path.join(input_folder, filename)
+    image = cv2.imread(filepath)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv[..., 2] = cv2.equalizeHist(hsv[..., 2])
 
-    # Load image and convert to HSV
-    img = cv2.imread(input_path)
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    best_combo = None
+    max_orange_area = 0
 
-    # === Red HSV ranges ===
-    lower_red1 = np.array([0, 100, 50])
-    upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([160, 100, 50])
-    upper_red2 = np.array([180, 255, 255])
+    for red_range in red_presets:
+        for orange_range in orange_presets:
+            temp_red = np.zeros(hsv.shape[:2], dtype=np.uint8)
+            temp_orange = np.zeros(hsv.shape[:2], dtype=np.uint8)
 
-    # === Yellow/Orange HSV range (extends contour outward) ===
-    lower_yellow = np.array([20, 80, 50])
-    upper_yellow = np.array([35, 255, 255])
+            for lower, upper in color_ranges["dark_red"] + red_range:
+                temp_red |= cv2.inRange(hsv, np.array(lower), np.array(upper))
+            for lower, upper in orange_range:
+                temp_orange |= cv2.inRange(hsv, np.array(lower), np.array(upper))
 
-    # Create masks
-    mask_red = cv2.bitwise_or(
-        cv2.inRange(hsv, lower_red1, upper_red1),
-        cv2.inRange(hsv, lower_red2, upper_red2)
-    )
-    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+            r_clean = cv2.morphologyEx(temp_red, cv2.MORPH_OPEN, kernel)
+            r_clean = cv2.morphologyEx(r_clean, cv2.MORPH_CLOSE, kernel)
+            o_clean = cv2.morphologyEx(temp_orange, cv2.MORPH_OPEN, kernel)
+            o_clean = cv2.morphologyEx(o_clean, cv2.MORPH_CLOSE, kernel)
 
-    # Combine red + yellow masks
-    heat_mask = cv2.bitwise_or(mask_red, mask_yellow)
+            combined = cv2.bitwise_or(r_clean, o_clean)
+            contours_r, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours_o, _ = cv2.findContours(o_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # === Morphological smoothing ===
-    kernel = np.ones((9, 9), np.uint8)
-    heat_mask = cv2.morphologyEx(heat_mask, cv2.MORPH_CLOSE, kernel)
-    heat_mask = cv2.morphologyEx(heat_mask, cv2.MORPH_OPEN, kernel)
+            total_area = 0
+            for o in contours_o:
+                if cv2.contourArea(o) < 100:
+                    continue
+                M = cv2.moments(o)
+                if M["m00"] == 0:
+                    continue
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                for r in contours_r:
+                    if cv2.pointPolygonTest(r, (cx, cy), False) >= 0:
+                        total_area += cv2.contourArea(o)
+                        break
 
-    # === Find and draw largest contour ===
-    contours, _ = cv2.findContours(heat_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if total_area > max_orange_area:
+                max_orange_area = total_area
+                best_combo = (r_clean, o_clean)
 
-    if contours:
-        largest = max(contours, key=cv2.contourArea)
+    if not best_combo:
+        print(f"⚠️ No match found in: {filename}")
+        continue
 
-        # Extract contour points
-        contour_points = largest.reshape(-1, 2)
+    red_mask, orange_mask = best_combo
+    combined_mask = cv2.bitwise_or(red_mask, orange_mask)
 
-        # Apply Convex Hull to find the boundary of the internal contour
-        hull = ConvexHull(contour_points)
-        hull_points = contour_points[hull.vertices]
+    contours_red, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours_orange, _ = cv2.findContours(orange_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Draw the hull as a red line
-        cv2.polylines(img, [hull_points], isClosed=True, color=(50, 50, 255), thickness=25)
+    candidate_circles = []
+    for o in contours_orange:
+        if cv2.contourArea(o) < 100:
+            continue
+        M = cv2.moments(o)
+        if M["m00"] == 0:
+            continue
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        for r in contours_red:
+            if cv2.pointPolygonTest(r, (cx, cy), False) >= 0:
+                (x, y), radius = cv2.minEnclosingCircle(o)
+                candidate_circles.append({
+                    "center": (int(x), int(y)),
+                    "radius": int(radius),
+                    "area": cv2.contourArea(o)
+                })
+                break
 
-        # Draw the original internal contour in green
-        cv2.drawContours(img, [largest], -1, (0, 255, 0), 2)
+    filtered_circles = []
+    for i, c1 in enumerate(candidate_circles):
+        inside_any = False
+        for j, c2 in enumerate(candidate_circles):
+            if i != j and is_inside(c1, c2):
+                inside_any = True
+                break
+        if not inside_any:
+            filtered_circles.append(c1)
 
-    # Save and display the result
-    cv2.imwrite(output_path, img)
-    print(f"✔ Saved: {output_path}")
+    # === Create yellow, blue, and dark red masks ===
+    yellow_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+    blue_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+    dark_red_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+
+    for lower, upper in yellow_range:
+        yellow_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
+    for lower, upper in blue_range:
+        blue_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
+    for lower, upper in color_ranges["dark_red"]:
+        dark_red_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
+
+    # === Final color-layer validation ===
+    valid_circles = []
+    for circle in filtered_circles:
+        cx, cy = circle["center"]
+        r = circle["radius"]
+
+        circle_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        cv2.circle(circle_mask, (cx, cy), r, 255, -1)
+
+        yellow_inside = cv2.countNonZero(cv2.bitwise_and(yellow_mask, yellow_mask, mask=circle_mask))
+        blue_inside = cv2.countNonZero(cv2.bitwise_and(blue_mask, blue_mask, mask=circle_mask))
+
+        outer_ring_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        cv2.circle(outer_ring_mask, (cx, cy), r + 8, 255, -1)
+        cv2.circle(outer_ring_mask, (cx, cy), r + 4, 0, -1)
+        dark_red_ring = cv2.countNonZero(cv2.bitwise_and(dark_red_mask, dark_red_mask, mask=outer_ring_mask))
+
+        if (yellow_inside > 10 or blue_inside > 10) and dark_red_ring > 10:
+            valid_circles.append(circle)
+
+    # === Draw only valid layered-circle defects ===
+    if valid_circles:
+        overlay = image.copy()
+        for circle in valid_circles:
+            center = circle["center"]
+            radius = circle["radius"]
+            cv2.circle(overlay, center, radius + 6, (0, 0, 0), 4)
+            cv2.circle(overlay, center, radius, (0, 255, 255), 4)
+            text = "Defect (Layered)"
+            text_position = (center[0] - radius, center[1] - radius - 10)
+            cv2.putText(overlay, text, text_position,
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        final_img = cv2.addWeighted(overlay, 0.75, image, 0.25, 0)
+        output_path = os.path.join(highlighted_output_folder, f"{filename}_highlighted.png")
+        cv2.imwrite(output_path, final_img)
+        print(f"✔ Saved layered defect: {filename}")
+    else:
+        print(f"⚠️ No valid layered defect in: {filename}")
+
+print("✅ All images processed.")
