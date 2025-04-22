@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import os
-
+#in this code we detect the crack area based on convex hull
 # === Directory Configuration ===
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
 heatmap_folder = os.path.join(base_path, "Al_heatmaps")
