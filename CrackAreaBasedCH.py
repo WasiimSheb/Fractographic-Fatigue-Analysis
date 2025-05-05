@@ -1,109 +1,66 @@
 import cv2
 import numpy as np
 import os
-#in this code we detect the crack area based on convex hull
-# === Directory Configuration ===
+from scipy.spatial import ConvexHull
+
+# === Paths ===
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
-heatmap_folder = os.path.join(base_path, "Al_heatmaps")
-highlighted_output_folder = os.path.join(base_path, "Al_CrackZone")
-mask_output_folder = os.path.join(base_path, "Al_Z27_01_orange_in_red_masks")
-os.makedirs(highlighted_output_folder, exist_ok=True)
-os.makedirs(mask_output_folder, exist_ok=True)
+input_folder = os.path.join(base_path, "SLM-Problamtic-HM")
+output_folder = os.path.join(base_path, "SLM-output")
+os.makedirs(output_folder, exist_ok=True)
 
-# === HSV Color Ranges ===
-color_ranges = {
-    "dark_red": [([0, 200, 100], [10, 255, 180]), ([160, 200, 100], [180, 255, 180])],
-    "red": [([0, 180, 180], [10, 255, 255]), ([160, 180, 180], [180, 255, 255])],
-    "orange": [([10, 100, 100], [25, 255, 255])],
-}
-
-kernel = np.ones((5, 5), np.uint8)
-
-# === Process Heatmaps ===
-for filename in os.listdir(heatmap_folder):
-    if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+# === Process each .png heatmap ===
+for image_name in os.listdir(input_folder):
+    if not image_name.lower().endswith(".png"):
         continue
 
-    filepath = os.path.join(heatmap_folder, filename)
-    image = cv2.imread(filepath)
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    input_path = os.path.join(input_folder, image_name)
+    output_path = os.path.join(output_folder, image_name.replace("_heatmap", "_heatmap_highlighted"))
 
-    red_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-    orange_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+    # Load image and convert to HSV
+    img = cv2.imread(input_path)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    # Build red mask
-    for lower, upper in color_ranges["dark_red"] + color_ranges["red"]:
-        red_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
+    # === Extended Warm HSV range (red to yellow) ===
+    lower_red1 = np.array([0, 70, 50])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([160, 70, 50])
+    upper_red2 = np.array([180, 255, 255])
+    lower_orange = np.array([11, 70, 50])
+    upper_orange = np.array([35, 255, 255])
 
-    # Build orange mask
-    for lower, upper in color_ranges["orange"]:
-        orange_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
-    orange_mask = cv2.morphologyEx(orange_mask, cv2.MORPH_OPEN, kernel)
-    orange_mask = cv2.morphologyEx(orange_mask, cv2.MORPH_CLOSE, kernel)
+    # Create warm zone masks
+    mask_red = cv2.bitwise_or(
+        cv2.inRange(hsv, lower_red1, upper_red1),
+        cv2.inRange(hsv, lower_red2, upper_red2)
+    )
+    mask_orange = cv2.inRange(hsv, lower_orange, upper_orange)
+    heat_mask = cv2.bitwise_or(mask_red, mask_orange)
 
-    contours_red, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours_orange, _ = cv2.findContours(orange_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # === Morphological smoothing ===
+    kernel = np.ones((9, 9), np.uint8)
+    heat_mask = cv2.morphologyEx(heat_mask, cv2.MORPH_CLOSE, kernel)
+    heat_mask = cv2.morphologyEx(heat_mask, cv2.MORPH_OPEN, kernel)
 
-    largest_contour = None
-    max_area = 0
+    # === Find and draw largest contour ===
+    contours, _ = cv2.findContours(heat_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
-    for o in contours_orange:
-        if cv2.contourArea(o) < 50:
-            continue
+    if contours:
+        largest = max(contours, key=cv2.contourArea)
 
-        M = cv2.moments(o)
-        if M["m00"] == 0:
-            continue
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
+        # Extract contour points
+        contour_points = largest.reshape(-1, 2)
 
-        for r in contours_red:
-            if cv2.pointPolygonTest(r, (cx, cy), False) >= 0:
-                area = cv2.contourArea(o)
-                if area > max_area:
-                    max_area = area
-                    largest_contour = o
-                break
+        # Apply Convex Hull
+        hull = ConvexHull(contour_points)
+        hull_points = contour_points[hull.vertices]
 
-    # === If a valid largest orange-in-red was found:
-    if largest_contour is not None:
-        overlay = image.copy()
-        (x, y), radius = cv2.minEnclosingCircle(largest_contour)
-        center = (int(x), int(y))
-        radius = int(radius)
+        # Draw convex hull in WHITE
+        cv2.polylines(img, [hull_points], isClosed=True, color=(255, 255, 255), thickness=25)
 
-        # Draw outer black ring + inner yellow
-        cv2.circle(overlay, center, radius + 6, (0, 0, 0), 4)
-        cv2.circle(overlay, center, radius, (0, 255, 255), 4)
+    else:
+        print(f"⚠ No contours found in: {image_name}")
 
-        # Label
-        text = "Internal Orange Zone"
-        text_position = (center[0] - radius, center[1] - radius - 10)
-        cv2.putText(overlay, text, text_position,
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-        # Blend overlay with image
-        image = cv2.addWeighted(overlay, 0.75, image, 0.25, 0)
-
-        # Save highlighted image
-        output_path = os.path.join(
-            highlighted_output_folder,
-            f"{os.path.splitext(filename)[0]}_highlighted.png"
-        )
-        cv2.imwrite(output_path, image)
-
-        # Save yellow-filled mask
-        mask_img = np.zeros_like(image)
-        cv2.drawContours(mask_img, [largest_contour], -1, (0, 255, 255), thickness=-1)
-
-        mask_save_path = os.path.join(
-            mask_output_folder,
-            f"{os.path.splitext(filename)[0]}_orange_in_red_mask.png"
-        )
-        cv2.imwrite(mask_save_path, mask_img)
-
-        print(f"✔ Saved largest orange-in-red for {filename}")
-
-print("✅ Done: Largest orange zone in red area saved for all heatmaps.")
+    # Save the final result
+    cv2.imwrite(output_path, img)
+    print(f"✔ Saved: {output_path}")
