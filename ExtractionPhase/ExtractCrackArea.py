@@ -4,17 +4,15 @@ import os
 
 # === Directory Configuration ===
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
-heatmap_folder = os.path.join(base_path, "Al_heatmaps")
-highlighted_output_folder = os.path.join(base_path, "Al_CrackZone")
-mask_output_folder = os.path.join(base_path, "Al_Z27_01_orange_in_red_masks")
+heatmap_folder = os.path.join(base_path, "SLM-P3-heatmaps")
+highlighted_output_folder = os.path.join(base_path, "SLM-P3-CrackZone-NEW")
 os.makedirs(highlighted_output_folder, exist_ok=True)
-os.makedirs(mask_output_folder, exist_ok=True)
 
 # === HSV Color Ranges ===
 color_ranges = {
     "dark_red": [([0, 200, 100], [10, 255, 180]), ([160, 200, 100], [180, 255, 180])],
     "red": [([0, 180, 180], [10, 255, 255]), ([160, 180, 180], [180, 255, 255])],
-    "orange": [([10, 100, 100], [25, 255, 255])],
+    "orange": [([10, 100, 100], [25, 255, 255])]
 }
 
 kernel = np.ones((5, 5), np.uint8)
@@ -28,21 +26,21 @@ for filename in os.listdir(heatmap_folder):
     image = cv2.imread(filepath)
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    red_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-    orange_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-
     # Build red mask
+    red_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
     for lower, upper in color_ranges["dark_red"] + color_ranges["red"]:
         red_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
 
     # Build orange mask
+    orange_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
     for lower, upper in color_ranges["orange"]:
         orange_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
     orange_mask = cv2.morphologyEx(orange_mask, cv2.MORPH_OPEN, kernel)
     orange_mask = cv2.morphologyEx(orange_mask, cv2.MORPH_CLOSE, kernel)
 
+    # Find contours
     contours_red, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours_orange, _ = cv2.findContours(orange_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -67,43 +65,30 @@ for filename in os.listdir(heatmap_folder):
                     largest_contour = o
                 break
 
-    # === If a valid largest orange-in-red was found:
+    # === Save Highlighted Heatmap
     if largest_contour is not None:
         overlay = image.copy()
         (x, y), radius = cv2.minEnclosingCircle(largest_contour)
         center = (int(x), int(y))
         radius = int(radius)
 
-        # Draw outer black ring + inner yellow
-        cv2.circle(overlay, center, radius + 6, (0, 0, 0), 4)
-        cv2.circle(overlay, center, radius, (0, 255, 255), 4)
+        # Draw circles in bold pink
+        cv2.circle(overlay, center, radius + 6, (255, 0, 255), 4)  # outer pink circle
+        cv2.circle(overlay, center, radius, (255, 0, 255), 6)      # inner pink circle
 
-        # Label
+        # Label with pink
         text = "Internal Orange Zone"
         text_position = (center[0] - radius, center[1] - radius - 10)
-        cv2.putText(overlay, text, text_position,
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(overlay, text, text_position, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 6)
 
-        # Blend overlay with image
-        image = cv2.addWeighted(overlay, 0.75, image, 0.25, 0)
 
-        # Save highlighted image
-        output_path = os.path.join(
-            highlighted_output_folder,
-            f"{os.path.splitext(filename)[0]}_highlighted.png"
-        )
-        cv2.imwrite(output_path, image)
+        # Blend overlay
+        final_result = cv2.addWeighted(overlay, 0.75, image, 0.25, 0)
 
-        # Save yellow-filled mask
-        mask_img = np.zeros_like(image)
-        cv2.drawContours(mask_img, [largest_contour], -1, (0, 255, 255), thickness=-1)
+        # Save only the highlighted heatmap
+        output_path = os.path.join(highlighted_output_folder, f"{os.path.splitext(filename)[0]}_highlighted.png")
+        cv2.imwrite(output_path, final_result)
 
-        mask_save_path = os.path.join(
-            mask_output_folder,
-            f"{os.path.splitext(filename)[0]}_orange_in_red_mask.png"
-        )
-        cv2.imwrite(mask_save_path, mask_img)
+        print(f"✔ Saved highlighted crack zone for {filename}")
 
-        print(f"✔ Saved largest orange-in-red for {filename}")
-
-print("✅ Done: Largest orange zone in red area saved for all heatmaps.")
+print("✅ Done: Highlighted crack zones saved for all heatmaps.")
