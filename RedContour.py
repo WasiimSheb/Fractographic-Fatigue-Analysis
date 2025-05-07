@@ -1,21 +1,25 @@
 import cv2
 import numpy as np
 import os
+import csv
 
 # === Paths ===
-base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
-input_folder = os.path.join(base_path, "EBM6-CrackZone")
-output_folder = os.path.join(base_path, "Red_Contours-EBM6")
-overlay_folder = os.path.join(output_folder, "overlays")
-os.makedirs(overlay_folder, exist_ok=True)
+base_path = "C:\\Users\\shifa\\final Project\\Enternal_Contours"
+input_folder = os.path.join(base_path, "EBM9-CrackZone-NEW")
+output_folder = os.path.join(base_path, "Red_Contours-EBM9")
+os.makedirs(output_folder, exist_ok=True)
+csv_folder = os.path.join(output_folder, "contours_csv")
+os.makedirs(csv_folder, exist_ok=True)
 
-# === HSV Range for Red ===
+# === HSV Range for Red Colors
 red_ranges = [
-    ([0, 180, 180], [10, 255, 255]),
-    ([160, 180, 180], [180, 255, 255])
+    ([0, 50, 50], [10, 255, 255]),     # Low red
+    ([160, 50, 50], [180, 255, 255])   # High red (wrap-around)
 ]
 
-kernel = np.ones((5, 5), np.uint8)
+# === Morphological Kernel
+kernel = np.ones((3, 3), np.uint8)
+MIN_AREA = 150
 
 # === Process Each Image ===
 for filename in os.listdir(input_folder):
@@ -27,10 +31,11 @@ for filename in os.listdir(input_folder):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # === Step 1: Detect crack zone ellipse ===
+    # === Step 1: Ellipse mask from white or pink
     ellipse_mask = np.zeros_like(gray)
     success = False
 
+    # Try white ellipse
     white_mask = cv2.inRange(img, (255, 255, 255), (255, 255, 255))
     white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
     contours_white, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -41,12 +46,13 @@ for filename in os.listdir(input_folder):
             cv2.ellipse(ellipse_mask, ellipse, 255, -1)
             success = True
 
+    # Try pink fallback
     if not success:
-        yellow_mask = cv2.inRange(hsv, (25, 150, 150), (35, 255, 255))
-        yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_CLOSE, kernel)
-        contours_yellow, _ = cv2.findContours(yellow_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_yellow:
-            largest = max(contours_yellow, key=cv2.contourArea)
+        pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))
+        pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
+        contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours_pink:
+            largest = max(contours_pink, key=cv2.contourArea)
             if len(largest) >= 5:
                 ellipse = cv2.fitEllipse(largest)
                 cv2.ellipse(ellipse_mask, ellipse, 255, -1)
@@ -56,7 +62,7 @@ for filename in os.listdir(input_folder):
         print(f"⚠ No ellipse found in {filename}")
         continue
 
-    # === Step 2: Segment red area inside ellipse ===
+    # === Step 2: Extract red area inside ellipse
     red_mask = np.zeros_like(gray)
     for lower, upper in red_ranges:
         red_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
@@ -65,20 +71,31 @@ for filename in os.listdir(input_folder):
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
 
-    # === Step 3: Extract largest contour (no convex hull)
+    # === Step 3: Get largest valid contour
     contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        print(f"❌ No red contours in {filename}")
+        print(f"❌ No red contour found in {filename}")
         continue
 
-    largest_contour = max(contours, key=cv2.contourArea)
+    largest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(largest) < MIN_AREA:
+        print(f"⚠ Contour too small in {filename}")
+        continue
 
-    # === Step 4: Draw and Save Overlay ===
+    # === Step 4: Save thick black contour overlay (optional)
     overlay = img.copy()
-    cv2.drawContours(overlay, [largest_contour], -1, (255, 255, 255), thickness=6)
-
-    overlay_path = os.path.join(overlay_folder, f"{filename[:-4]}_red_overlay.png")
+    cv2.drawContours(overlay, [largest], -1, (0, 0, 0), thickness=10)
+    overlay_path = os.path.join(output_folder, f"{filename[:-4]}_red_overlay.png")
     cv2.imwrite(overlay_path, overlay)
-    print(f"✅ Saved red overlay for {filename}")
 
-print("🎯 Done extracting realistic red internal contours (no convex hull).")
+    # === Step 5: Export contour as CSV
+    csv_path = os.path.join(csv_folder, f"{filename[:-4]}_red_contour.csv")
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["x", "y"])
+        for point in largest.squeeze():
+            writer.writerow(point)
+
+    print(f"✅ Saved red contour and overlay for {filename}")
+
+print("🎯 All red internal contours extracted.")
