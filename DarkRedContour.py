@@ -3,7 +3,7 @@ import numpy as np
 import os
 import csv
 
-# === Base Paths ===
+# === Base Paths ====
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
 input_folder = os.path.join(base_path, "SLM-P3-CrackZone")
 output_folder = os.path.join(base_path, "DarkRed_Contours-SLM-P3")
