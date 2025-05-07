@@ -1,13 +1,18 @@
 import cv2
 import numpy as np
 import os
+import csv
 
 # === Base Paths ===
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
 input_folder = os.path.join(base_path, "SLM-P3-CrackZone")
 output_folder = os.path.join(base_path, "DarkRed_Contours-SLM-P3")
 overlay_folder = os.path.join(output_folder, "overlays")
+mask_folder = os.path.join(output_folder, "masks")              # ✅ NEW
+csv_folder = os.path.join(output_folder, "csv_pixels")          # ✅ NEW
 os.makedirs(overlay_folder, exist_ok=True)
+os.makedirs(mask_folder, exist_ok=True)                         # ✅ NEW
+os.makedirs(csv_folder, exist_ok=True)                          # ✅ NEW
 
 # === Color Range for Dark Red in HSV ===
 dark_red_ranges = [
@@ -28,7 +33,7 @@ for filename in os.listdir(input_folder):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # === Step 1: Detect Ellipse (White or Yellow)
+    # === Step 1: Detect Ellipse (White or Pink) === ✅ MODIFIED
     ellipse_mask = np.zeros_like(gray)
     success = False
 
@@ -43,11 +48,11 @@ for filename in os.listdir(input_folder):
             success = True
 
     if not success:
-        yellow_mask = cv2.inRange(hsv, (25, 150, 150), (35, 255, 255))
-        yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_CLOSE, kernel)
-        contours_yellow, _ = cv2.findContours(yellow_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_yellow:
-            largest = max(contours_yellow, key=cv2.contourArea)
+        pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))  # ✅ pink instead of yellow
+        pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
+        contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours_pink:
+            largest = max(contours_pink, key=cv2.contourArea)
             if len(largest) >= 5:
                 ellipse = cv2.fitEllipse(largest)
                 cv2.ellipse(ellipse_mask, ellipse, 255, -1)
@@ -68,6 +73,19 @@ for filename in os.listdir(input_folder):
     # Clean mask
     dark_red_mask = cv2.morphologyEx(dark_red_mask, cv2.MORPH_OPEN, kernel)
     dark_red_mask = cv2.morphologyEx(dark_red_mask, cv2.MORPH_CLOSE, kernel)
+
+    # === ✅ Step 2.5: Save binary mask
+    mask_path = os.path.join(mask_folder, f"{filename[:-4]}_darkred_mask.png")
+    cv2.imwrite(mask_path, dark_red_mask)
+
+    # === ✅ Step 2.6: Export pixel coordinates to CSV
+    ys, xs = np.where(dark_red_mask > 0)
+    csv_path = os.path.join(csv_folder, f"{filename[:-4]}_pixels.csv")
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["x", "y"])
+        for x, y in zip(xs, ys):
+            writer.writerow([x, y])
 
     # === Step 3: Get Contours and Filter Inside Ellipse
     contours, _ = cv2.findContours(dark_red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -101,4 +119,4 @@ for filename in os.listdir(input_folder):
     cv2.imwrite(overlay_path, overlay)
     print(f"✅ Overlay saved for {filename}")
 
-print("🎯 Finished filtering and saving corrected overlays.")
+print("🎯 Finished filtering, saving overlays, masks, and pixel CSVs.")
