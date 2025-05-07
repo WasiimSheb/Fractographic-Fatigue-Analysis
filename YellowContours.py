@@ -1,24 +1,30 @@
-import cv2
+import cv2 
 import numpy as np
 import os
-
-# \This is the initial processing of the yellow color in the heatmaps...
+import csv
 
 # === Paths ===
-base_path = "C:\\Users\\wasim\\Projects\\heatmaps-classifier\\crackedsamples"
-input_folder = os.path.join(base_path, "EBM6_CrackZone")
-output_folder = os.path.join(base_path, "Cyan_Contour_P1")
+base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
+input_folder = os.path.join(base_path, "SLM-P3-CrackZone-NEW")
+output_folder = os.path.join(base_path, "yellow Contours_SLM-P3")
 os.makedirs(output_folder, exist_ok=True)
+csv_folder = os.path.join(output_folder, "contours_csv")
+os.makedirs(csv_folder, exist_ok=True)
 
-# Combine both cyan and yellow HSV ranges
-cyan_ranges = [
-    ([15, 100, 100], [40, 255, 255]),   # Yellow-Orange
-    ([80, 100, 100], [100, 255, 255])   # Cyan
+# === Color Ranges (HSV)
+combined_ranges = [
+    ([0, 50, 50], [10, 255, 255]),     # Red low
+    ([160, 50, 50], [180, 255, 255]),  # Red high
+    ([11, 80, 80], [22, 255, 255]),    # Orange
+    ([23, 90, 90], [38, 255, 255]),    # Yellow
+    ([85, 50, 80], [105, 255, 255])    # Cyan
 ]
 
-kernel = np.ones((5, 5), np.uint8)
+# === Morphological Kernel and Contour Area Filter
+kernel = np.ones((3, 3), np.uint8)
+MIN_AREA = 150
 
-# === Process Each Image ===
+# === Process All Images ===
 for filename in os.listdir(input_folder):
     if not filename.lower().endswith(".png"):
         continue
@@ -28,10 +34,11 @@ for filename in os.listdir(input_folder):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # === Step 1: Detect crack zone ellipse
+    # === Step 1: Ellipse mask from white or green
     ellipse_mask = np.zeros_like(gray)
     success = False
 
+    # -- Try white contour
     white_mask = cv2.inRange(img, (255, 255, 255), (255, 255, 255))
     white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
     contours_white, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -42,41 +49,57 @@ for filename in os.listdir(input_folder):
             cv2.ellipse(ellipse_mask, ellipse, 255, -1)
             success = True
 
+        # -- Try pink fallback
     if not success:
-        yellow_mask_for_ellipse = cv2.inRange(hsv, (25, 150, 150), (35, 255, 255))
-        yellow_mask_for_ellipse = cv2.morphologyEx(yellow_mask_for_ellipse, cv2.MORPH_CLOSE, kernel)
-        contours_yellow, _ = cv2.findContours(yellow_mask_for_ellipse, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_yellow:
-            largest = max(contours_yellow, key=cv2.contourArea)
+        pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))  # HSV range for pink
+        pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
+        contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours_pink:
+            largest = max(contours_pink, key=cv2.contourArea)
             if len(largest) >= 5:
                 ellipse = cv2.fitEllipse(largest)
                 cv2.ellipse(ellipse_mask, ellipse, 255, -1)
                 success = True
 
+
     if not success:
         print(f"⚠ No ellipse found in {filename}")
         continue
 
-    # === Step 2: Segment cyan parts inside ellipse
-    cyan_mask = np.zeros_like(gray)
-    for lower, upper in cyan_ranges:
-        cyan_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
+    # === Step 2: Combine masks from all ranges
+    combined_mask = np.zeros_like(gray)
+    for lower, upper in combined_ranges:
+        combined_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
 
-    cyan_inside = cv2.bitwise_and(cyan_mask, ellipse_mask)
-    cyan_inside = cv2.morphologyEx(cyan_inside, cv2.MORPH_OPEN, kernel)
-    cyan_inside = cv2.morphologyEx(cyan_inside, cv2.MORPH_CLOSE, kernel)
+    combined_mask = cv2.bitwise_and(combined_mask, ellipse_mask)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
 
-    # === Step 3: Extract contours and draw in white
-    contours, _ = cv2.findContours(cyan_inside, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # === Step 3: Extract largest contour (true envelope)
+    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        print(f"❌ No cyan areas found in {filename}")
+        print(f"❌ No contours found in {filename}")
         continue
 
+    largest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(largest) < MIN_AREA:
+        print(f"⚠ Contour too small in {filename}")
+        continue
+
+    # === Step 4: Save overlay image with thick black contour
     overlay = img.copy()
-    cv2.drawContours(overlay, contours, -1, (255, 255, 255), thickness=6)
+    cv2.drawContours(overlay, [largest], -1, (0, 0, 0), thickness=10)
+    out_path = os.path.join(output_folder, f"{filename[:-4]}_envelope_overlay.png")
+    cv2.imwrite(out_path, overlay)
 
-    output_path = os.path.join(output_folder, f"{filename[:-4]}_cyan_contour.png")
-    cv2.imwrite(output_path, overlay)
-    print(f"✅ Saved cyan contour overlay for {filename}")
+    # === Step 5: Save contour points to CSV
+    csv_path = os.path.join(csv_folder, f"{filename[:-4]}_contour.csv")
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["x", "y"])
+        for point in largest.squeeze():
+            writer.writerow(point)
 
-print("🎯 Done highlighting cyan areas with white contours.")
+    print(f"✅ Saved contour and overlay for {filename}")
+
+print("🎯 All envelopes generated and saved.")
