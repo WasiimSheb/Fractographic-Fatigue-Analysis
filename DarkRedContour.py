@@ -3,16 +3,19 @@ import numpy as np
 import os
 import csv
 
-# === Base Paths ====
+# in this code we find the dark red contours in the image and save them as a mask and overlay
+# and also save the pixel coordinates of the dark red contours in a csv file
+
+# === Base Paths ===
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
-input_folder = os.path.join(base_path, "SLM-P3-CrackZone")
+input_folder = os.path.join(base_path, "SLM-P3-CrackZone-NEW")
 output_folder = os.path.join(base_path, "DarkRed_Contours-SLM-P3")
 overlay_folder = os.path.join(output_folder, "overlays")
-mask_folder = os.path.join(output_folder, "masks")              # ✅ NEW
-csv_folder = os.path.join(output_folder, "csv_pixels")          # ✅ NEW
+mask_folder = os.path.join(output_folder, "masks")              
+csv_folder = os.path.join(output_folder, "csv_pixels")         
 os.makedirs(overlay_folder, exist_ok=True)
-os.makedirs(mask_folder, exist_ok=True)                         # ✅ NEW
-os.makedirs(csv_folder, exist_ok=True)                          # ✅ NEW
+os.makedirs(mask_folder, exist_ok=True)                         
+os.makedirs(csv_folder, exist_ok=True)                          
 
 # === Color Range for Dark Red in HSV ===
 dark_red_ranges = [
@@ -33,34 +36,24 @@ for filename in os.listdir(input_folder):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # === Step 1: Detect Ellipse (White or Pink) === ✅ MODIFIED
+    # === Step 1: Ellipse mask from pink 
     ellipse_mask = np.zeros_like(gray)
-    success = False
-
-    white_mask = cv2.inRange(img, (255, 255, 255), (255, 255, 255))
-    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
-    contours_white, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if contours_white:
-        largest = max(contours_white, key=cv2.contourArea)
+    pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))  # HSV range for pink
+    pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
+    contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours_pink:
+        largest = max(contours_pink, key=cv2.contourArea)
         if len(largest) >= 5:
             ellipse = cv2.fitEllipse(largest)
             cv2.ellipse(ellipse_mask, ellipse, 255, -1)
-            success = True
-
-    if not success:
-        pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))  # ✅ pink instead of yellow
-        pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
-        contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_pink:
-            largest = max(contours_pink, key=cv2.contourArea)
-            if len(largest) >= 5:
-                ellipse = cv2.fitEllipse(largest)
-                cv2.ellipse(ellipse_mask, ellipse, 255, -1)
-                success = True
-
-    if not success:
-        print(f"⚠ No ellipse found in {filename}")
+        else:
+            print(f"⚠ Not enough points for ellipse in {filename}")
+            continue
+    else:
+        print(f"⚠ No pink ellipse found in {filename}")
         continue
+
+
 
     # === Step 2: Create Dark Red Mask and Filter by Ellipse
     dark_red_mask = np.zeros_like(gray)
@@ -74,11 +67,11 @@ for filename in os.listdir(input_folder):
     dark_red_mask = cv2.morphologyEx(dark_red_mask, cv2.MORPH_OPEN, kernel)
     dark_red_mask = cv2.morphologyEx(dark_red_mask, cv2.MORPH_CLOSE, kernel)
 
-    # === ✅ Step 2.5: Save binary mask
+    #= Step 2.5: Save binary mask
     mask_path = os.path.join(mask_folder, f"{filename[:-4]}_darkred_mask.png")
     cv2.imwrite(mask_path, dark_red_mask)
 
-    # === ✅ Step 2.6: Export pixel coordinates to CSV
+    #  Step 2.6: Export pixel coordinates to CSV
     ys, xs = np.where(dark_red_mask > 0)
     csv_path = os.path.join(csv_folder, f"{filename[:-4]}_pixels.csv")
     with open(csv_path, 'w', newline='') as csvfile:
@@ -113,7 +106,7 @@ for filename in os.listdir(input_folder):
 
     # === Step 4: Draw White Contour on Overlay Only
     overlay = img.copy()
-    cv2.drawContours(overlay, [hull], -1, (255, 255, 255), thickness=6)
+    cv2.drawContours(overlay, [hull], -1, (0, 0, 0), thickness=10)
 
     overlay_path = os.path.join(overlay_folder, f"{filename[:-4]}_overlay_clipped.png")
     cv2.imwrite(overlay_path, overlay)
