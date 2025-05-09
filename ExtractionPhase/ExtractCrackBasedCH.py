@@ -3,10 +3,12 @@ import numpy as np
 import os
 from scipy.spatial import ConvexHull
 
+#in this code we find the crack zone using convex hull 
+
 # === Paths ===
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
-input_folder = os.path.join(base_path, "SLM-Problamtic-HM")
-output_folder = os.path.join(base_path, "SLM-output")
+input_folder = os.path.join(base_path, "HM")
+output_folder = os.path.join(base_path, "output")
 os.makedirs(output_folder, exist_ok=True)
 
 # === Process each .png heatmap ===
@@ -47,16 +49,15 @@ for image_name in os.listdir(input_folder):
 
     if contours:
         largest = max(contours, key=cv2.contourArea)
-
-        # Extract contour points
         contour_points = largest.reshape(-1, 2)
 
         # Apply Convex Hull
         hull = ConvexHull(contour_points)
         hull_points = contour_points[hull.vertices]
 
-        # Draw convex hull in WHITE
-        cv2.polylines(img, [hull_points], isClosed=True, color=(255, 255, 255), thickness=25)
+        # Draw convex hull in bold pink
+        pink_color = (255, 0, 255)  # BGR format
+        cv2.polylines(img, [hull_points], isClosed=True, color=pink_color, thickness=10)
 
     else:
         print(f"⚠ No contours found in: {image_name}")
