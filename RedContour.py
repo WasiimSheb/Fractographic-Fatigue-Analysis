@@ -3,7 +3,7 @@ import numpy as np
 import os
 import csv
 
-## in this code we find the red internal contour of the crack zone
+# in this code we find the red internal contour of the crack zone
 # === Paths ====
 base_path = "C:\\Users\\shifa\\final Project\\Enternal_Contours"
 input_folder = os.path.join(base_path, "EBM9-CrackZone-NEW")
