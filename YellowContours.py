@@ -34,36 +34,21 @@ for filename in os.listdir(input_folder):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # === Step 1: Ellipse mask from white or green
+    # === Step 1: Ellipse mask from pink 
     ellipse_mask = np.zeros_like(gray)
-    success = False
-
-    # -- Try white contour
-    white_mask = cv2.inRange(img, (255, 255, 255), (255, 255, 255))
-    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
-    contours_white, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if contours_white:
-        largest = max(contours_white, key=cv2.contourArea)
+    pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))  # HSV range for pink
+    pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
+    contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours_pink:
+        largest = max(contours_pink, key=cv2.contourArea)
         if len(largest) >= 5:
             ellipse = cv2.fitEllipse(largest)
             cv2.ellipse(ellipse_mask, ellipse, 255, -1)
-            success = True
-
-        # -- Try pink fallback
-    if not success:
-        pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))  # HSV range for pink
-        pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
-        contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_pink:
-            largest = max(contours_pink, key=cv2.contourArea)
-            if len(largest) >= 5:
-                ellipse = cv2.fitEllipse(largest)
-                cv2.ellipse(ellipse_mask, ellipse, 255, -1)
-                success = True
-
-
-    if not success:
-        print(f"⚠ No ellipse found in {filename}")
+        else:
+            print(f"⚠ Not enough points for ellipse in {filename}")
+            continue
+    else:
+        print(f"⚠ No pink ellipse found in {filename}")
         continue
 
     # === Step 2: Combine masks from all ranges
