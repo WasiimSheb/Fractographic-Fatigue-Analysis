@@ -2,26 +2,35 @@ import cv2
 import numpy as np
 import os
 import csv
-from scipy.spatial import cKDTree
+from scipy.interpolate import splprep, splev
+from scipy.ndimage import binary_fill_holes
 
 # === Paths ===
 base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
-input_folder = os.path.join(base_path, "SLM-P1-CrackZone-NEW")
-output_folder = os.path.join(base_path, "Cyan_CrackFront-P1")
+    input_folder = os.path.join(base_path, "EBM6-CrackZone-New")
+output_folder = os.path.join(base_path, "cyan_Internal-EBM6")
 os.makedirs(output_folder, exist_ok=True)
-csv_folder = os.path.join(output_folder, "contours_csv")
+csv_folder = os.path.join(output_folder, "crackzone_contour_csv")
 os.makedirs(csv_folder, exist_ok=True)
 
-# === HSV Range for Cyan
-cyan_lower = np.array([80, 30, 60])
-cyan_upper = np.array([110, 255, 255])
+# === HSV Ranges for Red + Orange + Yellow + Cyan
+combined_ranges = [
+    ([0, 50, 50], [10, 255, 255]),     # Red low
+    ([160, 50, 50], [180, 255, 255]),  # Red high
+    ([11, 80, 80], [22, 255, 255]),    # Orange
+    ([23, 90, 90], [38, 255, 255]),    # Yellow
+    ([85, 50, 80], [105, 255, 255])    # Cyan
+]
 
-# === Morphology Kernel
-kernel = np.ones((5, 5), np.uint8)
+# === Morphological Kernels
+dilate_kernel = np.ones((25, 25), np.uint8)    # Stronger dilation now
+close_kernel = np.ones((35, 35), np.uint8)     # Stronger closing
+open_kernel = np.ones((5, 5), np.uint8)
 
-# === Parameters
-DISTANCE_TO_ELLIPSE = 150  # maximum distance allowed from ellipse to accept cyan region
-MIN_AREA = 200  # Minimum contour area to accept
+# === Other Parameters
+DILATION_PIXELS = 100
+SMOOTHNESS = 0.001   # Slightly smoother spline
+NUM_POINTS = 600     # Resample points along the spline
 
 # === Process All Images ===
 for filename in os.listdir(input_folder):
@@ -33,21 +42,17 @@ for filename in os.listdir(input_folder):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # === Step 1: Create masks
-    cyan_mask = cv2.inRange(hsv, cyan_lower, cyan_upper)
-    cyan_mask = cv2.morphologyEx(cyan_mask, cv2.MORPH_OPEN, kernel)
-    cyan_mask = cv2.morphologyEx(cyan_mask, cv2.MORPH_CLOSE, kernel)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Create ellipse mask
+    # === Step 1: Detect Pink Ellipse Mask
     ellipse_mask = np.zeros_like(gray)
     pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))
-    pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, kernel)
+    pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, open_kernel)
     contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
     if contours_pink:
-        largest_pink = max(contours_pink, key=cv2.contourArea)
-        if len(largest_pink) >= 5:
-            ellipse = cv2.fitEllipse(largest_pink)
+        largest = max(contours_pink, key=cv2.contourArea)
+        if len(largest) >= 5:
+            ellipse = cv2.fitEllipse(largest)
             cv2.ellipse(ellipse_mask, ellipse, 255, -1)
         else:
             print(f"⚠ Not enough points for ellipse in {filename}")
@@ -56,63 +61,60 @@ for filename in os.listdir(input_folder):
         print(f"⚠ No pink ellipse found in {filename}")
         continue
 
-    # === Step 2: Find all cyan points close to ellipse
-    ellipse_points = np.column_stack(np.where(ellipse_mask > 0))  # (y,x)
-    cyan_points = np.column_stack(np.where(cyan_mask > 0))        # (y,x)
+    allowed_area = cv2.dilate(ellipse_mask, np.ones((DILATION_PIXELS, DILATION_PIXELS), np.uint8))
 
-    if cyan_points.size == 0:
-        print(f"❌ No cyan region detected in {filename}")
-        continue
+    # === Step 2: Combine Masks from All Color Ranges
+    combined_mask = np.zeros_like(gray)
+    for lower, upper in combined_ranges:
+        lower_np = np.array(lower)
+        upper_np = np.array(upper)
+        combined_mask |= cv2.inRange(hsv, lower_np, upper_np)
 
-    # Build KDTree once
-    tree = cKDTree(ellipse_points)
+    combined_mask = cv2.bitwise_and(combined_mask, allowed_area)
 
-    # Query all cyan points at once!
-    distances, _ = tree.query(cyan_points)
-    selected = cyan_points[distances <= DISTANCE_TO_ELLIPSE]
+    # === Step 3: Improve the Mask
+    combined_mask = cv2.dilate(combined_mask, dilate_kernel)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, close_kernel)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, open_kernel)
 
-    if selected.size == 0:
-        print(f"❌ No cyan points close enough to ellipse in {filename}")
-        continue
+    # === Step 4: Fill Holes Inside
+    combined_mask = binary_fill_holes(combined_mask > 0).astype(np.uint8) * 255
 
-    selected_points = np.array([[x, y] for y, x in selected])
-
-    # === Step 3: Create one contour (full envelope)
-    crack_mask = np.zeros_like(gray)
-    for point in selected_points:
-        cv2.circle(crack_mask, tuple(point), 1, 255, -1)
-
-    crack_mask = cv2.dilate(crack_mask, np.ones((5,5), np.uint8), iterations=2)
-    crack_mask = cv2.morphologyEx(crack_mask, cv2.MORPH_CLOSE, kernel)
-
-    # Find contours
-    contours, _ = cv2.findContours(crack_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # === Step 5: Find External Contour
+    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        print(f"❌ No final contour detected in {filename}")
+        print(f"❌ No crack zone contour found in {filename}")
         continue
 
-    # Take the largest contour
     largest_contour = max(contours, key=cv2.contourArea)
+    largest_contour = largest_contour.squeeze()
 
-    if cv2.contourArea(largest_contour) < MIN_AREA:
-        print(f"⚠ Detected contour too small in {filename}")
+    if len(largest_contour.shape) != 2 or largest_contour.shape[0] < 10:
+        print(f"⚠ Contour too small or broken in {filename}")
         continue
 
-    # === Step 4: Save overlay
-    overlay = img.copy()
-    cv2.drawContours(overlay, [largest_contour], -1, (0, 0, 0), thickness=10)
+    # === Step 6: Fit a Spline Curve
+    x, y = largest_contour[:, 0], largest_contour[:, 1]
+    tck, u = splprep([x, y], s=SMOOTHNESS, per=True)
+    u_fine = np.linspace(0, 1, NUM_POINTS)
+    x_fine, y_fine = splev(u_fine, tck)
 
-    out_path = os.path.join(output_folder, f"{filename[:-4]}_envelope_overlay.png")
+    smooth_contour = np.stack((x_fine, y_fine), axis=1).astype(np.int32)
+
+    # === Step 7: Save Overlay Image
+    overlay = img.copy()
+    cv2.polylines(overlay, [smooth_contour], isClosed=True, color=(0, 0, 0), thickness=10)
+    out_path = os.path.join(output_folder, f"{filename[:-4]}_crackzone_contour_overlay.png")
     cv2.imwrite(out_path, overlay)
 
-    # === Step 5: Save contour points to CSV
-    csv_path = os.path.join(csv_folder, f"{filename[:-4]}_envelope_contour.csv")
+    # === Step 8: Save Contour Points to CSV
+    csv_path = os.path.join(csv_folder, f"{filename[:-4]}_crackzone_contour.csv")
     with open(csv_path, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["x", "y"])
-        for point in largest_contour.squeeze():
-            writer.writerow(point)
+        for pt in smooth_contour:
+            writer.writerow(pt)
 
-    print(f"✅ Full crack front envelope saved for {filename}")
+    print(f"✅ Saved final crack zone contour for {filename}")
 
-print("🎯 Crack front envelopes created successfully and FAST!")
+print("🎯 All final crack zone envelopes extracted and smoothed successfully!")
