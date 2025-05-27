@@ -3,7 +3,7 @@ import numpy as np
 import os
 from scipy.ndimage import binary_fill_holes
 
-# === Parameters ====
+# === Parameters ===
 PIXEL_SIZE_MICRONS = 1.34375
 DILATION_PIXELS = 200
 MIN_AREA = 5000
@@ -14,7 +14,12 @@ COLOR_RANGES = {
     "red": [([0, 50, 50], [10, 255, 255]), ([160, 50, 50], [180, 255, 255])],
     "yellow": [([11, 80, 80], [22, 255, 255]), ([23, 90, 90], [38, 255, 255])],
     "cyan": [([85, 50, 80], [105, 255, 255])],
-    "blue": [([105, 50, 50], [125, 255, 255])]
+    "blue": [([0, 50, 50], [10, 255, 255]),
+             ([160, 50, 50], [180, 255, 255]),
+             ([11, 80, 80], [22, 255, 255]),
+             ([23, 90, 90], [38, 255, 255]),
+             ([85, 50, 80], [105, 255, 255]),
+             ([105, 50, 50], [125, 255, 255])]
 }
 
 # === Paths ===
@@ -22,10 +27,18 @@ input_folder = r"C:\Users\shifa\final project\ellipses\SLM-P1-CrackZone-New"
 output_folder = r"C:\Users\shifa\final project\ellipses\ellipses_SLM-P1"
 os.makedirs(output_folder, exist_ok=True)
 
+# Create subfolders per color
+color_folders = {}
+for color in COLOR_RANGES.keys():
+    color_folder = os.path.join(output_folder, f"{color}_ellipses")
+    os.makedirs(color_folder, exist_ok=True)
+    color_folders[color] = color_folder
+
 # === Kernels ===
 open_kernel = np.ones((5, 5), np.uint8)
 close_kernel = np.ones((30, 30), np.uint8)
 expand_kernel = np.ones((100, 100), np.uint8)
+dilate_kernel = np.ones((25, 25), np.uint8)
 
 for filename in os.listdir(input_folder):
     if not filename.lower().endswith(".png"):
@@ -47,7 +60,7 @@ for filename in os.listdir(input_folder):
     pink_ellipse = cv2.fitEllipse(max(contours_pink, key=cv2.contourArea))
     cv2.ellipse(ellipse_mask, pink_ellipse, 255, -1)
 
-    # Step 2: For each color – generate ellipse
+    # Step 2: For each color
     for color, hsv_ranges in COLOR_RANGES.items():
         color_mask = np.zeros_like(gray)
         for lower, upper in hsv_ranges:
@@ -55,14 +68,14 @@ for filename in os.listdir(input_folder):
 
         allowed_area = cv2.dilate(ellipse_mask, np.ones((DILATION_PIXELS, DILATION_PIXELS), np.uint8))
         color_mask = cv2.bitwise_and(color_mask, allowed_area)
-        color_mask = cv2.dilate(color_mask, np.ones((25, 25), np.uint8))
+        color_mask = cv2.dilate(color_mask, dilate_kernel)
         color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
         color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, open_kernel)
         color_mask = binary_fill_holes(color_mask > 0).astype(np.uint8) * 255
-        color_mask = cv2.dilate(color_mask, expand_kernel)
+        expanded_mask = cv2.dilate(color_mask, expand_kernel)
 
-        # Keep largest component
-        num_labels, labels_im = cv2.connectedComponents(color_mask)
+        # Keep largest connected component
+        num_labels, labels_im = cv2.connectedComponents(expanded_mask)
         max_area = 0
         largest_label = 0
         for label_idx in range(1, num_labels):
@@ -87,7 +100,7 @@ for filename in os.listdir(input_folder):
         # Draw on the original heatmap
         overlay = img.copy()
         cv2.ellipse(overlay, fitted_ellipse, (0, 0, 0), thickness=10)
-        out_path = os.path.join(output_folder, f"{filename[:-4]}_{color}_ellipse_overlay.png")
+        out_path = os.path.join(color_folders[color], f"{filename[:-4]}_{color}_ellipse_overlay.png")
         cv2.imwrite(out_path, overlay)
 
         print(f"✅ {color} ellipse saved for {filename}")
