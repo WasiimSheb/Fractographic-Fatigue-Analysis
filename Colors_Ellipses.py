@@ -3,7 +3,7 @@ import numpy as np
 import os
 from scipy.ndimage import binary_fill_holes
 
-# === Parameters ===
+# === Parameters ====
 PIXEL_SIZE_MICRONS = 1.34375
 DILATION_PIXELS = 200
 MIN_AREA = 5000
