@@ -1,67 +1,130 @@
 import cv2
 import numpy as np
 import os
-from scipy.spatial import ConvexHull
+from scipy.ndimage import binary_fill_holes
 
-#in this code we find the crack zone using convex hull 
+# === Parameters ===
+PIXEL_SIZE_MICRONS = 1.34375
+DILATION_PIXELS = 200
+MIN_AREA = 5000
+
+# === HSV Ranges for Each Color ===
+COLOR_RANGES = {
+    "dark_red": [([0, 200, 100], [10, 255, 180]), ([160, 200, 100], [180, 255, 180])],
+    "red": [([0, 50, 50], [10, 255, 255]), ([160, 50, 50], [180, 255, 255])],
+    "yellow": [([0, 50, 50], [10, 255, 255]),
+               ([160, 50, 50], [180, 255, 255]),
+               ([11, 80, 80], [22, 255, 255]),
+               ([23, 90, 90], [38, 255, 255])],
+    "cyan": [([0, 50, 50], [10, 255, 255]),
+             ([160, 50, 50], [180, 255, 255]),
+             ([11, 80, 80], [22, 255, 255]),
+             ([23, 90, 90], [38, 255, 255]),
+             ([85, 50, 80], [105, 255, 255])],
+    "blue": [([0, 50, 50], [10, 255, 255]),
+             ([160, 50, 50], [180, 255, 255]),
+             ([11, 80, 80], [22, 255, 255]),
+             ([23, 90, 90], [38, 255, 255]),
+             ([85, 50, 80], [105, 255, 255]),
+             ([105, 50, 50], [125, 255, 255])]
+}
 
 # === Paths ===
-base_path = "C:\\Users\\shifa\\final project\\Enternal_Contours"
-input_folder = os.path.join(base_path, "HM")
-output_folder = os.path.join(base_path, "output")
+input_folder = r"C:\Users\shifa\final project\ellipses\SLM-P1-CrackZone-New"
+output_folder = r"C:\Users\shifa\final project\ellipses\ellipses_SLM-P1-NEW"
 os.makedirs(output_folder, exist_ok=True)
 
-# === Process each .png heatmap ===
-for image_name in os.listdir(input_folder):
-    if not image_name.lower().endswith(".png"):
+# Create subfolders per color
+color_folders = {}
+for color in COLOR_RANGES.keys():
+    color_folder = os.path.join(output_folder, f"{color}_ellipses")
+    os.makedirs(color_folder, exist_ok=True)
+    color_folders[color] = color_folder
+
+# === Kernels ===
+open_kernel = np.ones((5, 5), np.uint8)
+close_kernel = np.ones((30, 30), np.uint8)
+expand_kernel_blue = np.ones((400, 400), np.uint8)
+expand_kernel_cyan = np.ones((200, 200), np.uint8)
+expand_kernel_yellow = np.ones((50, 50), np.uint8)
+dilate_kernel = np.ones((25, 25), np.uint8)
+
+for filename in os.listdir(input_folder):
+    if not filename.lower().endswith(".png"):
         continue
 
-    input_path = os.path.join(input_folder, image_name)
-    output_path = os.path.join(output_folder, image_name.replace("_heatmap", "_heatmap_highlighted"))
-
-    # Load image and convert to HSV
-    img = cv2.imread(input_path)
+    img_path = os.path.join(input_folder, filename)
+    img = cv2.imread(img_path)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # === Extended Warm HSV range (red to yellow) ===
-    lower_red1 = np.array([0, 70, 50])
-    upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([160, 70, 50])
-    upper_red2 = np.array([180, 255, 255])
-    lower_orange = np.array([11, 70, 50])
-    upper_orange = np.array([35, 255, 255])
+    # Step 1: Detect Pink Ellipse (crack zone)
+    pink_mask = cv2.inRange(hsv, (140, 50, 50), (170, 255, 255))
+    pink_mask = cv2.morphologyEx(pink_mask, cv2.MORPH_CLOSE, open_kernel)
+    contours_pink, _ = cv2.findContours(pink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours_pink or len(max(contours_pink, key=cv2.contourArea)) < 5:
+        print(f"❌ No valid pink crack zone ellipse in {filename}")
+        continue
+    ellipse_mask = np.zeros_like(gray)
+    pink_ellipse = cv2.fitEllipse(max(contours_pink, key=cv2.contourArea))
+    cv2.ellipse(ellipse_mask, pink_ellipse, 255, -1)
 
-    # Create warm zone masks
-    mask_red = cv2.bitwise_or(
-        cv2.inRange(hsv, lower_red1, upper_red1),
-        cv2.inRange(hsv, lower_red2, upper_red2)
-    )
-    mask_orange = cv2.inRange(hsv, lower_orange, upper_orange)
-    heat_mask = cv2.bitwise_or(mask_red, mask_orange)
+    # Step 2: For each color
+    for color, hsv_ranges in COLOR_RANGES.items():
+        color_mask = np.zeros_like(gray)
+        for lower, upper in hsv_ranges:
+            color_mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
 
-    # === Morphological smoothing ===
-    kernel = np.ones((9, 9), np.uint8)
-    heat_mask = cv2.morphologyEx(heat_mask, cv2.MORPH_CLOSE, kernel)
-    heat_mask = cv2.morphologyEx(heat_mask, cv2.MORPH_OPEN, kernel)
+        allowed_area = cv2.dilate(ellipse_mask, np.ones((DILATION_PIXELS, DILATION_PIXELS), np.uint8))
+        color_mask = cv2.bitwise_and(color_mask, allowed_area)
+        color_mask = cv2.dilate(color_mask, dilate_kernel)
+        color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
+        color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, open_kernel)
+        color_mask = binary_fill_holes(color_mask > 0).astype(np.uint8) * 255
 
-    # === Find and draw largest contour ===
-    contours, _ = cv2.findContours(heat_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        # Use expanded component technique for yellow, cyan, blue
+        if color == "blue":
+            expanded_mask = cv2.dilate(color_mask, expand_kernel_blue)
+        elif color == "cyan":
+            expanded_mask = cv2.dilate(color_mask, expand_kernel_cyan)
+        elif color == "yellow":
+            expanded_mask = cv2.dilate(color_mask, expand_kernel_yellow)
+        else:
+            expanded_mask = color_mask
 
-    if contours:
-        largest = max(contours, key=cv2.contourArea)
-        contour_points = largest.reshape(-1, 2)
+        # Connected component filtering
+        if color in ["blue", "cyan", "yellow"]:
+            num_labels, labels_im = cv2.connectedComponents(expanded_mask)
+            max_area = 0
+            largest_label = 0
+            for label_idx in range(1, num_labels):
+                area = np.count_nonzero(labels_im == label_idx)
+                if area > max_area:
+                    max_area = area
+                    largest_label = label_idx
 
-        # Apply Convex Hull
-        hull = ConvexHull(contour_points)
-        hull_points = contour_points[hull.vertices]
+            if max_area < MIN_AREA:
+                print(f"⚠ Not enough area for {color} in {filename}")
+                continue
 
-        # Draw convex hull in bold pink
-        pink_color = (255, 0, 255)  # BGR format
-        cv2.polylines(img, [hull_points], isClosed=True, color=pink_color, thickness=10)
+            final_mask = np.uint8(labels_im == largest_label) * 255
+            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        else:
+            contours, _ = cv2.findContours(expanded_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    else:
-        print(f"⚠ No contours found in: {image_name}")
+        if not contours or len(max(contours, key=cv2.contourArea)) < 5:
+            print(f"⚠ Not enough contour points for ellipse for {color} in {filename}")
+            continue
 
-    # Save the final result
-    cv2.imwrite(output_path, img)
-    print(f"✔ Saved: {output_path}")
+        largest_contour = max(contours, key=cv2.contourArea)
+        fitted_ellipse = cv2.fitEllipse(largest_contour)
+
+        # Draw on the original heatmap
+        overlay = img.copy()
+        cv2.ellipse(overlay, fitted_ellipse, (0, 0, 0), thickness=20)
+        out_path = os.path.join(color_folders[color], f"{filename[:-4]}_{color}_ellipse_overlay.png")
+        cv2.imwrite(out_path, overlay)
+
+        print(f"✅ {color} ellipse saved for {filename}")
+
+print("🎯 All ellipses drawn and saved.")
