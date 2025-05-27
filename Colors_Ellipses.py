@@ -12,12 +12,15 @@ MIN_AREA = 5000
 COLOR_RANGES = {
     "dark_red": [([0, 200, 100], [10, 255, 180]), ([160, 200, 100], [180, 255, 180])],
     "red": [([0, 50, 50], [10, 255, 255]), ([160, 50, 50], [180, 255, 255])],
-    "yellow": [([11, 80, 80], [22, 255, 255]), ([23, 90, 90], [38, 255, 255])],
+    "yellow": [([0, 50, 50], [10, 255, 255]),
+               ([160, 50, 50], [180, 255, 255]),
+               ([11, 80, 80], [22, 255, 255]),
+               ([23, 90, 90], [38, 255, 255])],
     "cyan": [([0, 50, 50], [10, 255, 255]),
              ([160, 50, 50], [180, 255, 255]),
              ([11, 80, 80], [22, 255, 255]),
              ([23, 90, 90], [38, 255, 255]),
-             ([85, 50, 80], [105, 255, 255])],  # Use broad mask like blue
+             ([85, 50, 80], [105, 255, 255])],
     "blue": [([0, 50, 50], [10, 255, 255]),
              ([160, 50, 50], [180, 255, 255]),
              ([11, 80, 80], [22, 255, 255]),
@@ -42,7 +45,8 @@ for color in COLOR_RANGES.keys():
 open_kernel = np.ones((5, 5), np.uint8)
 close_kernel = np.ones((30, 30), np.uint8)
 expand_kernel_blue = np.ones((400, 400), np.uint8)
-expand_kernel_cyan = np.ones((100, 100), np.uint8)
+expand_kernel_cyan = np.ones((200, 200), np.uint8)
+expand_kernel_yellow = np.ones((50, 50), np.uint8)
 dilate_kernel = np.ones((25, 25), np.uint8)
 
 for filename in os.listdir(input_folder):
@@ -78,15 +82,18 @@ for filename in os.listdir(input_folder):
         color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, open_kernel)
         color_mask = binary_fill_holes(color_mask > 0).astype(np.uint8) * 255
 
+        # Use expanded component technique for yellow, cyan, blue
         if color == "blue":
             expanded_mask = cv2.dilate(color_mask, expand_kernel_blue)
         elif color == "cyan":
             expanded_mask = cv2.dilate(color_mask, expand_kernel_cyan)
+        elif color == "yellow":
+            expanded_mask = cv2.dilate(color_mask, expand_kernel_yellow)
         else:
             expanded_mask = color_mask
 
-        # Fully follow blue approach for cyan
-        if color in ["cyan", "blue"]:
+        # Connected component filtering
+        if color in ["blue", "cyan", "yellow"]:
             num_labels, labels_im = cv2.connectedComponents(expanded_mask)
             max_area = 0
             largest_label = 0
