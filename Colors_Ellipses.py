@@ -13,7 +13,11 @@ COLOR_RANGES = {
     "dark_red": [([0, 200, 100], [10, 255, 180]), ([160, 200, 100], [180, 255, 180])],
     "red": [([0, 50, 50], [10, 255, 255]), ([160, 50, 50], [180, 255, 255])],
     "yellow": [([11, 80, 80], [22, 255, 255]), ([23, 90, 90], [38, 255, 255])],
-    "cyan": [([85, 50, 80], [105, 255, 255])],
+    "cyan": [([0, 50, 50], [10, 255, 255]),
+             ([160, 50, 50], [180, 255, 255]),
+             ([11, 80, 80], [22, 255, 255]),
+             ([23, 90, 90], [38, 255, 255]),
+             ([85, 50, 80], [105, 255, 255])],  # Use broad mask like blue
     "blue": [([0, 50, 50], [10, 255, 255]),
              ([160, 50, 50], [180, 255, 255]),
              ([11, 80, 80], [22, 255, 255]),
@@ -24,7 +28,7 @@ COLOR_RANGES = {
 
 # === Paths ===
 input_folder = r"C:\Users\shifa\final project\ellipses\SLM-P1-CrackZone-New"
-output_folder = r"C:\Users\shifa\final project\ellipses\ellipses_SLM-P1"
+output_folder = r"C:\Users\shifa\final project\ellipses\ellipses_SLM-P1-NEW"
 os.makedirs(output_folder, exist_ok=True)
 
 # Create subfolders per color
@@ -37,7 +41,8 @@ for color in COLOR_RANGES.keys():
 # === Kernels ===
 open_kernel = np.ones((5, 5), np.uint8)
 close_kernel = np.ones((30, 30), np.uint8)
-expand_kernel = np.ones((100, 100), np.uint8)
+expand_kernel_blue = np.ones((400, 400), np.uint8)
+expand_kernel_cyan = np.ones((100, 100), np.uint8)
 dilate_kernel = np.ones((25, 25), np.uint8)
 
 for filename in os.listdir(input_folder):
@@ -72,24 +77,34 @@ for filename in os.listdir(input_folder):
         color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
         color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, open_kernel)
         color_mask = binary_fill_holes(color_mask > 0).astype(np.uint8) * 255
-        expanded_mask = cv2.dilate(color_mask, expand_kernel)
 
-        # Keep largest connected component
-        num_labels, labels_im = cv2.connectedComponents(expanded_mask)
-        max_area = 0
-        largest_label = 0
-        for label_idx in range(1, num_labels):
-            area = np.count_nonzero(labels_im == label_idx)
-            if area > max_area:
-                max_area = area
-                largest_label = label_idx
+        if color == "blue":
+            expanded_mask = cv2.dilate(color_mask, expand_kernel_blue)
+        elif color == "cyan":
+            expanded_mask = cv2.dilate(color_mask, expand_kernel_cyan)
+        else:
+            expanded_mask = color_mask
 
-        if max_area < MIN_AREA:
-            print(f"⚠ Not enough area for {color} in {filename}")
-            continue
+        # Fully follow blue approach for cyan
+        if color in ["cyan", "blue"]:
+            num_labels, labels_im = cv2.connectedComponents(expanded_mask)
+            max_area = 0
+            largest_label = 0
+            for label_idx in range(1, num_labels):
+                area = np.count_nonzero(labels_im == label_idx)
+                if area > max_area:
+                    max_area = area
+                    largest_label = label_idx
 
-        final_mask = np.uint8(labels_im == largest_label) * 255
-        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if max_area < MIN_AREA:
+                print(f"⚠ Not enough area for {color} in {filename}")
+                continue
+
+            final_mask = np.uint8(labels_im == largest_label) * 255
+            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        else:
+            contours, _ = cv2.findContours(expanded_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
         if not contours or len(max(contours, key=cv2.contourArea)) < 5:
             print(f"⚠ Not enough contour points for ellipse for {color} in {filename}")
             continue
@@ -99,7 +114,7 @@ for filename in os.listdir(input_folder):
 
         # Draw on the original heatmap
         overlay = img.copy()
-        cv2.ellipse(overlay, fitted_ellipse, (0, 0, 0), thickness=10)
+        cv2.ellipse(overlay, fitted_ellipse, (0, 0, 0), thickness=20)
         out_path = os.path.join(color_folders[color], f"{filename[:-4]}_{color}_ellipse_overlay.png")
         cv2.imwrite(out_path, overlay)
 
