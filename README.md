@@ -93,7 +93,16 @@ Raw files are typically **`.tif`**; the pipeline converts them to **`.png`** dur
 Dependencies: `opencv-python`, `numpy`, `scipy`, `pandas`, `matplotlib`, `Pillow`.
 
 ---
+---
 
+
+### 8 ) `Documentation & Reports`  
+
+Fractographic Defect Detection Research.pdf – full research paper: Computer Vision Methods for Fractographic Defect Detection in Titanium and Aluminum Alloys.
+
+final Presentation.pptx – final presentation slides summarizing the research and results.
+
+---
 ## 🚀 Quick Start
 
 ```bash
